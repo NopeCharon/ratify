@@ -448,6 +448,97 @@ func TestStripNamespacePrefix(t *testing.T) {
 	}
 }
 
+func TestNormalizeReference(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "Empty reference",
+			input:    "",
+			expected: "",
+		},
+		{
+			name:     "Official image",
+			input:    "nginx",
+			expected: "docker.io/library/nginx",
+		},
+		{
+			name:     "Official image with tag",
+			input:    "nginx:1.27",
+			expected: "docker.io/library/nginx:1.27",
+		},
+		{
+			name:     "Official image with digest",
+			input:    "nginx@sha256:abc123",
+			expected: "docker.io/library/nginx@sha256:abc123",
+		},
+		{
+			name:     "Docker Hub user image",
+			input:    "org/app:v1",
+			expected: "docker.io/org/app:v1",
+		},
+		{
+			name:     "Docker Hub user image with nested path",
+			input:    "org/team/app:v1",
+			expected: "docker.io/org/team/app:v1",
+		},
+		{
+			name:     "Docker Hub official image without library namespace",
+			input:    "docker.io/nginx:1.27",
+			expected: "docker.io/library/nginx:1.27",
+		},
+		{
+			name:     "Fully qualified Docker Hub image",
+			input:    "docker.io/library/nginx:1.27",
+			expected: "docker.io/library/nginx:1.27",
+		},
+		{
+			name:     "Registry with domain",
+			input:    "registry.example.com/app:v1",
+			expected: "registry.example.com/app:v1",
+		},
+		{
+			name:     "Registry with domain and single component repository",
+			input:    "registry.example.com/app",
+			expected: "registry.example.com/app",
+		},
+		{
+			name:     "Registry with port",
+			input:    "registry:5000/notation@sha256:abc123",
+			expected: "registry:5000/notation@sha256:abc123",
+		},
+		{
+			name:     "Localhost registry",
+			input:    "localhost/app:v1",
+			expected: "localhost/app:v1",
+		},
+		{
+			name:     "IPv6 registry",
+			input:    "[2001:db8::1]:5000/repo:tag",
+			expected: "[2001:db8::1]:5000/repo:tag",
+		},
+		{
+			name:     "Uppercase first component",
+			input:    "Registry/app:v1",
+			expected: "Registry/app:v1",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result := NormalizeReference(test.input)
+			if result != test.expected {
+				t.Errorf("expected %q, got %q", test.expected, result)
+			}
+			if again := NormalizeReference(result); again != result {
+				t.Errorf("expected normalization to be idempotent, got %q from %q", again, result)
+			}
+		})
+	}
+}
+
 func TestValidateArtifact(t *testing.T) {
 	scopedExecutor := &ScopedExecutor{
 		wildcard: map[string]*ratify.Executor{
@@ -466,6 +557,19 @@ func TestValidateArtifact(t *testing.T) {
 	// Verify namespace prefix is stripped before scope matching
 	if _, err := scopedExecutor.ValidateArtifact(context.Background(), "[default]unknown.com/foo:v1"); err == nil {
 		t.Error("expected error for prefixed unknown artifact, got nil")
+	}
+
+	// Verify a short name is normalized to Docker Hub before scope matching
+	if _, err := scopedExecutor.ValidateArtifact(context.Background(), "nginx:latest"); !errors.Is(err, ErrNoExecutorMatched) {
+		t.Errorf("expected ErrNoExecutorMatched for unscoped short name, got: %v", err)
+	}
+	dockerHubExecutor := &ScopedExecutor{
+		registry: map[string]*ratify.Executor{
+			"docker.io": {},
+		},
+	}
+	if _, err := dockerHubExecutor.ValidateArtifact(context.Background(), "[default]nginx:latest"); errors.Is(err, ErrNoExecutorMatched) {
+		t.Errorf("expected short name to match the Docker Hub executor, got: %v", err)
 	}
 }
 
@@ -493,6 +597,21 @@ func TestResolve(t *testing.T) {
 
 	if _, err := scopedExecutor.Resolve(context.Background(), "[default]unknown.com/foo:v1"); err == nil {
 		t.Error("expected error for prefixed unknown artifact, got nil")
+	}
+
+	// Verify a short name is normalized to Docker Hub before scope matching
+	dockerHubExecutor := &ScopedExecutor{
+		repository: map[string]*ratify.Executor{
+			"docker.io/library/nginx": {
+				Store: &mockStore{},
+			},
+		},
+	}
+	if _, err := dockerHubExecutor.Resolve(context.Background(), "nginx:latest"); err != nil {
+		t.Error("expected no error for short name matching the Docker Hub executor, got:", err)
+	}
+	if _, err := dockerHubExecutor.Resolve(context.Background(), "[default]nginx"); err != nil {
+		t.Error("expected no error for prefixed short name matching the Docker Hub executor, got:", err)
 	}
 }
 

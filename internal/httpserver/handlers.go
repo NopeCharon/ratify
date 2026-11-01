@@ -138,7 +138,9 @@ func (s *server) resolveReference(ctx context.Context, key string) externaldata.
 		Value: reference,
 	}
 
-	ref, err := registry.ParseReference(reference)
+	// Normalize short names such as "nginx:latest" to the Docker Hub reference
+	// that the kubelet pulls, since they do not name a registry.
+	ref, err := registry.ParseReference(executor.NormalizeReference(reference))
 	if err != nil {
 		item.Error = fmt.Sprintf("failed to parse reference: %v", err)
 		log.Errorf("failed to parse reference %s: %v", reference, err)
