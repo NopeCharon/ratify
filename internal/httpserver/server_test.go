@@ -317,6 +317,63 @@ func TestStartServer_AddressInUse(t *testing.T) {
 	}
 }
 
+func TestStartServer_TLSAddressInUse(t *testing.T) {
+	tempDir := t.TempDir()
+
+	executorOpts := &executor.Options{
+		Executors: []executor.ScopedOptions{
+			{
+				Scopes: []string{registryPattern},
+				Verifiers: []verifier.NewOptions{
+					{
+						Name: mockVerifierName,
+						Type: mockVerifierType,
+					},
+				},
+				Stores: []store.NewOptions{
+					{
+						Type: mockStoreType,
+					},
+				},
+			},
+		},
+	}
+
+	raw, err := json.Marshal(executorOpts)
+	if err != nil {
+		t.Fatalf("failed to marshal executor options: %v", err)
+	}
+	configPath := filepath.Join(tempDir, "config.json")
+	if err := os.WriteFile(configPath, raw, 0600); err != nil {
+		t.Fatalf("failed to write config file: %v", err)
+	}
+
+	certPath, keyPath, err := createTLSCertAndKey(tempDir)
+	if err != nil {
+		t.Fatalf("failed to create TLS cert and key: %v", err)
+	}
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to listen: %v", err)
+	}
+	defer listener.Close()
+
+	serverOpts := &ServerOptions{
+		HTTPServerAddress: listener.Addr().String(),
+		CertFile:          certPath,
+		KeyFile:           keyPath,
+	}
+
+	// The TLS server cannot bind to an address that is already in use, so
+	// StartServer must return an error instead of blocking until it is
+	// signaled to stop.
+	err = startServerWithTimeout(t, serverOpts, configPath)
+	if err == nil || !strings.Contains(err.Error(), "failed to start server") {
+		t.Fatalf("expected a server start error, got: %v", err)
+	}
+}
+
 // runServerUntilSignaled runs StartServer, sends SIGTERM to the process once
 // the server is running, and fails the test if StartServer does not shut down
 // gracefully.
